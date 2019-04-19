@@ -20,3 +20,8 @@ FM transmitter based on QN8007 with MP3 player and PA
 ### Bottom view
 
 ![picture](pic_bottom.jpg)
+
+---
+To open schematics, it is necessary to add all gEDA symbols here to your symbol library: https://github.com/gabriel-tenma-white/sym
+
+To edit PCB layouts, make sure "packages" is a symlink to a cloned repository of: https://github.com/gabriel-tenma-white/packages2
