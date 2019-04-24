@@ -6,6 +6,25 @@ FM transmitter based on QN8007 with MP3 player and PA
 * 1W PA using RQA0009
 * Integrated output lowpass filter
 
+### Building the software
+* Download and build libopencm3 (https://github.com/libopencm3/libopencm3)
+* Build:
+```bash
+cd qn8007_fm_tx/sw
+export OPENCM3_DIR=/PATH/TO/LIBOPENCM3
+make
+```
+* Download and build st-link software (https://github.com/texane/stlink)
+* Flash device (using ST-Link, available from aliexpress)
+```bash
+cd qn8007_fm_tx/sw
+rm st-flash
+ln -s /PATH/TO/STLINK/build/Release/st-flash ./
+
+./st-flash --reset --format ihex write binary.hex
+# or 'make flash'
+```
+
 
 ### PCB stackup
 * 4 layers
