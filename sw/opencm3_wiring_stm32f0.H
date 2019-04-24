@@ -65,7 +65,7 @@ void enable_exti_irqs() {
 }
 
 void device_specific_wiringInit() {
-    
+    rcc_periph_clock_enable(RCC_GPIOF);
 }
 
 
