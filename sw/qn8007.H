@@ -212,7 +212,7 @@ public:
 	void QN_ChipInitialization() {
 		QND_WriteReg(0x01,0x89); //reset
 		QND_WriteReg(0x02,0x80);
-		QND_WriteReg(ANACTL1, 0b00101011); // Set the crystal to 19.2 MHz.
+		QND_WriteReg(ANACTL1, 0b00101011); // Set the crystal to 26 MHz.
 		if(extClk) {
 			QND_WriteReg(XLT3, 0x10);
 			QND_WriteReg(REG_VGA, 0x3f);

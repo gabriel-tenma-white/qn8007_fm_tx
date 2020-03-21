@@ -38,8 +38,11 @@ int cpu_mhz;
 QN8007 qn8007;
 int led=PA4;
 
-uint32_t frequency = 8790;
+uint32_t frequency = 8790; // multiplied by 10kHz
 int volume = 24;
+
+int frequencyMax = 10800;
+int frequencyMin = 8700;
 
 uint32_t SONG_MAX_LENGTH_SECONDS = 60*10; // songs longer than 10 minutes will be cut off
 
@@ -50,7 +53,7 @@ buttonsManager<4> bm;
 
 volatile uint64_t systemCounter = 0;
 volatile uint32_t entropy;
-uint8_t ledState = 3; // 0: unlit; 1: lit; 2: temperature monitor blink; 3: do not change
+volatile uint8_t ledState = 3; // 0: unlit; 1: lit; 2: temperature monitor blink; 3: do not change
 volatile bool shouldSkip = false;
 uint16_t songCount = 0;
 
@@ -58,13 +61,13 @@ void handleButtonEvent(buttonEvent event);
 
 bool loadSettings() {
 	const uint8_t* cfg = FLASH_CONFIGURATION_PAGE;
-	if(!(cfg[0] == 'f' && cfg[1] == 'u' && cfg[2] == 'c' && cfg[3] == 'k'))
+	if(!(cfg[0] == 'f' && cfg[1] == 'u' && cfg[2] == 'c' && cfg[3] == 'K'))
 		return false;
 	frequency = (uint32_t(cfg[4])<<8) | (uint32_t(cfg[5]));
 	return true;
 }
 void saveSettings() {
-	uint8_t tmp[] = "fuck....";
+	uint8_t tmp[] = "fucK....";
 	tmp[4] = uint8_t(frequency>>8);
 	tmp[5] = uint8_t(frequency);
 	
@@ -72,28 +75,35 @@ void saveSettings() {
 	if(addr < 0x08000000u) addr += 0x08000000u;
 	flash_program_data(addr, tmp, 8);
 }
+
+extern "C" void abort();
+void timer_setup(int tim, int prescaler, int period) {
+	if(tim == TIM1) {
+		rcc_periph_clock_enable(RCC_TIM1);
+		rcc_periph_reset_pulse(RST_TIM1);
+	} else if(tim == TIM3) {
+		rcc_periph_clock_enable(RCC_TIM3);
+		rcc_periph_reset_pulse(RST_TIM3);
+	} else abort();
+	timer_set_mode(tim, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
+	timer_set_prescaler(tim, prescaler - 1);
+	timer_set_repetition_counter(tim, 0);
+	timer_continuous_mode(tim);
+	timer_set_period(tim, period - 1);
+	
+	timer_enable_preload(tim);
+	timer_enable_preload_complementry_enable_bits(tim);
+}
+
 // set up system tick interrupt
 void timer1_setup() {
 	// set the timer to count one tick per us
-	rcc_periph_clock_enable(RCC_TIM1);
-	rcc_periph_reset_pulse(RST_TIM1);
-	timer_set_mode(TIM1, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
-	timer_set_prescaler(TIM1, cpu_mhz-1);
-	timer_set_repetition_counter(TIM1, 0);
-	timer_continuous_mode(TIM1);
-	
-	// BUG(xaxaxa): this doesn't really set the period, but the "autoreload value"; actual period is this plus 1.
-	// this should be fixed in libopencm3.
-	timer_set_period(TIM1, 32767);
-	
-	timer_enable_preload(TIM1);
-	timer_enable_preload_complementry_enable_bits(TIM1);
-	
+	timer_setup(TIM1, cpu_mhz, 32768);
+
 	timer_enable_irq(TIM1, TIM_DIER_UIE);
 	nvic_enable_irq(NVIC_TIM1_BRK_UP_TRG_COM_IRQ);
 	
 	TIM1_EGR = TIM_EGR_UG;
-	
 	timer_enable_counter(TIM1);
 }
 
@@ -148,30 +158,16 @@ void errorBlink(int cnt) {
 
 // set up temperature monitor timer interrupt
 void timer3_setup() {
-	uint32_t tim = TIM3; // changing this requires changing code below too
-	rcc_periph_clock_enable(RCC_TIM3);
-	rcc_periph_reset_pulse(RST_TIM3);
-	// set the timer to count one tick per us
-	timer_set_mode(tim, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
 	// timer clock: 1kHz
 	// warning: cpu frequency must be < 64MHz
-	timer_set_prescaler(tim, (cpu_mhz*1000)-1);
-	timer_set_repetition_counter(tim, 0);
-	timer_continuous_mode(tim);
-	
-	// BUG(xaxaxa): this doesn't really set the period, but the "autoreload value"; actual period is this plus 1.
-	// this should be fixed in libopencm3.
-	timer_set_period(tim, 10); // milliseconds
-	
-	timer_enable_preload(tim);
-	timer_enable_preload_complementry_enable_bits(tim);
-	
-	timer_enable_irq(tim, TIM_DIER_UIE);
+	// period: 10ms
+	timer_setup(TIM3, cpu_mhz * 1000, 10);
+
+	timer_enable_irq(TIM3, TIM_DIER_UIE);
 	nvic_enable_irq(NVIC_TIM3_IRQ);
-	
 	TIM3_EGR = TIM_EGR_UG;
 	
-	timer_enable_counter(tim);
+	timer_enable_counter(TIM3);
 }
 
 
@@ -380,6 +376,18 @@ int32_t readTemperature() {
 }
 
 
+// PA bias potentiometer
+// this is currently unused (always adjusted to minimum for class C operation),
+// so for safety bias voltage is turned off.
+void bias_on() {
+	pinMode(PA10, OUTPUT);
+	digitalWrite(PA10, LOW); // change this to HIGH to enable PA bias
+}
+
+void bias_off() {
+	pinMode(PA10, OUTPUT);
+	digitalWrite(PA10, LOW);
+}
 
 int qn8007_setup() {
 	qn8007.clk = PA5;
@@ -397,10 +405,12 @@ int qn8007_setup() {
 void qn8007_enable() {
 	qn8007.QND_SetSysMode(QND_MODE_TX);
 	qn8007.i2c_write(0x5a, 0b01000000);
+	bias_on();
 }
 void qn8007_disable() {
 	qn8007.QND_SetSysMode(QND_MODE_SLEEP);
 	qn8007.i2c_write(0x5a, 0b01111111);
+	bias_off();
 }
 
 
@@ -477,8 +487,8 @@ void ui_changeFreq(bool down, bool roundToInt) {
 		if(down) frequency -= 10;
 		else frequency += 10;
 	}
-	if(frequency < 8700) frequency = 8700;
-	if(frequency > 10800) frequency = 10800;
+	if(frequency < frequencyMin) frequency = frequencyMin;
+	if(frequency > frequencyMax) frequency = frequencyMax;
 	qn8007.QNF_SetCh(frequency);
 	saveSettings();
 }
@@ -528,15 +538,11 @@ int main(void)
 	digitalWrite(led, HIGH);
 	
 	Serial.begin(9600);
-	
-	PRNTLN("asdf");
+
 	delay(100);
 	digitalWrite(led, LOW);
 
-	// PA bias potentiometer
-	pinMode(PA10, OUTPUT);
-	digitalWrite(PA10, HIGH);
-	
+
 	buttons_setup(); // initialize buttons state machine
 	timer1_setup(); // system tick & buttons poll
 	//delayMicroseconds = delayMicroseconds_timer;
@@ -545,8 +551,9 @@ int main(void)
 	
 	
 	if(qn8007_setup() < 0) {
+		// repeated slow blink 4 pulses: qn8007 init failed
 		while (1) {
-			for(int i=0;i<3;i++) {
+			for(int i=0;i<4;i++) {
 				digitalWrite(led, HIGH);
 				delay(300);
 				digitalWrite(led, LOW);
@@ -557,16 +564,12 @@ int main(void)
 	}
 	//qn8007_disable();
 	
-	bool qn8007_started = false;
-	
 	ledState = 3;
-	if(!qn8007_started) {
-		qn8007_started = true;
-		// set up overtemp monitor irq
-		timer3_setup();
-		// enable tx
-		qn8007_enable();
-	}
+
+	// set up overtemp monitor irq
+	timer3_setup();
+	// enable tx
+	qn8007_enable();
 
 rst:
 	{
@@ -585,7 +588,8 @@ rst:
 		
 		uint16_t tmp;
 		if(!dfplayer_receiveInt(tmp, 2000)) {
-			for(int i=0;i<3;i++) {
+			// fast blink 2 pulses: dfplayer init failed
+			for(int i=0;i<2;i++) {
 				digitalWrite(led, HIGH);
 				delay(100);
 				digitalWrite(led, LOW);
@@ -601,6 +605,7 @@ rst:
 	
 		
 		// blink leds based on the total number of songs
+		// one long pulse followed by n short pulses, where n is (number of songs) / 100 rounded down
 		digitalWrite(led, HIGH);
 		delay(500);
 		digitalWrite(led, LOW);
@@ -616,14 +621,6 @@ rst:
 		}
 		delay(500);
 		
-		if(!qn8007_started) {
-			qn8007_started = true;
-			// enable tx
-			qn8007_enable();
-			// set up overtemp monitor irq
-			timer3_setup();
-		}
-		
 		ledState = 2;
 		play_loop();
 		ledState = 3;
@@ -632,6 +629,13 @@ rst:
 }
 
 extern "C" void abort() {
+	// prevent infinite recursion
+	static bool abortCalled = false;
+	if(!abortCalled) {
+		abortCalled = true;
+		qn8007_disable();
+		qn8007_disable();
+	}
 	while (1) {
 		for(int i=0;i<3;i++) {
 			digitalWrite(led, HIGH);
